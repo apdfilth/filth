@@ -1,0 +1,19 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# Compiled binaries & artifacts
+*.so
+*.dll
+*.dylib
+*.vst3/
+*.lv2/
+*.component/
+
+# IDE & OS files
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+.DS_Store

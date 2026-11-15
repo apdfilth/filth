@@ -66,6 +66,8 @@ private:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void processAudio(juce::dsp::AudioBlock<float> block) noexcept;
+    void applyPreCodecDrive(juce::dsp::AudioBlock<float> block) noexcept;
+    void applyPostCodecDrive(juce::dsp::AudioBlock<float> block) noexcept;
     float processStftSample(ChannelStft& state, float inputSample, float filth) noexcept;
     int applyMp3SpectralArtifacts(float intensity) noexcept;
     void corruptSpectrum(float amount, int cutoffBin, uint32_t frame) noexcept;
@@ -75,7 +77,8 @@ private:
 
     juce::dsp::Compressor<float> compressor;
     juce::dsp::FirstOrderTPTFilter<float> dcBlocker;
-    std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    std::unique_ptr<juce::dsp::Oversampling<float>> preCodecOversampler;
+    std::unique_ptr<juce::dsp::Oversampling<float>> postCodecOversampler;
     juce::AudioBuffer<float> dryDelay;
     juce::AudioBuffer<float> dryBlock;
     std::vector<float> knobValues;

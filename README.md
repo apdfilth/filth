@@ -10,8 +10,9 @@ Single-knob **VST3 / LV2 / Standalone** audio plugin built with JUCE and CMake.
 | 75% | The stacked drives and spectral glitches dominate the original tone. |
 | 100% | Fully stacked drive and full spectral corruption. Frame dropouts, bin shifts, and phase scrambling largely obscure the fundamental. |
 
-The three drives run in series at 4× oversampling. The LEDs light up with the
-soft overdrive, asymmetric clipper, and wavefolder in that order.
+The signal runs through compression and soft overdrive, then MP3-style artifacts
+and spectral corruption, then asymmetric clipping and wavefolding. All three
+drives run at 4× oversampling. The LEDs follow the three drives in signal order.
 
 ## Building
 

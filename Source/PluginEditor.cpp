@@ -1,20 +1,22 @@
 #include "PluginEditor.h"
-#include "FilthResponse.h"
 #include <BinaryData.h>
+#include <algorithm>
 #include <cmath>
 
 namespace
 {
-const juce::Rectangle<float> ledHousing { 128.0f, 421.0f, 160.0f, 50.0f };
+const juce::Rectangle<float> ledHousing { 116.0f, 421.0f, 184.0f, 50.0f };
+const juce::Rectangle<int> knobReadout { 172, 379, 72, 25 };
 
 juce::Point<float> pointOnDial(juce::Point<float> centre, float radius, float angle)
 {
     return centre + juce::Point<float>(radius * std::sin(angle), -radius * std::cos(angle));
 }
 
-void drawSmdLed(juce::Graphics& g, juce::Point<float> centre, juce::Colour light, float level)
+void drawSmdLed(juce::Graphics& g, juce::Point<float> centre, float level)
 {
-    const auto package = juce::Rectangle<float>(20.0f, 11.0f).withCentre(centre);
+    const juce::Colour amber(0xffffa62b);
+    const auto package = juce::Rectangle<float>(18.0f, 11.0f).withCentre(centre);
     g.setColour(juce::Colour(0xff858176));
     g.fillRoundedRectangle(package, 1.5f);
     g.setColour(juce::Colour(0xffb8a982));
@@ -22,20 +24,20 @@ void drawSmdLed(juce::Graphics& g, juce::Point<float> centre, juce::Colour light
     g.fillRect(package.withLeft(package.getRight() - 3.0f).reduced(0.0f, 2.0f));
 
     const auto lens = package.reduced(3.5f, 1.1f);
-    g.setColour(juce::Colour(0xff5e5761).interpolatedWith(light, level));
+    g.setColour(juce::Colour(0xff69543c).interpolatedWith(amber, level));
     g.fillRoundedRectangle(lens, 1.2f);
-    g.setColour(juce::Colour(0xff252223).interpolatedWith(juce::Colours::ivory, level));
+    g.setColour(juce::Colour(0xff33251b).interpolatedWith(juce::Colour(0xffffd788), level));
     g.fillRoundedRectangle(lens.reduced(3.5f, 2.3f), 1.0f);
 
     if (level > 0.0f)
     {
-        g.setGradientFill(juce::ColourGradient(light.withAlpha(level * 0.64f), centre,
-                            light.withAlpha(0.0f), centre.translated(19.0f, 0.0f), true));
-        g.fillEllipse(juce::Rectangle<float>(38.0f, 34.0f).withCentre(centre));
+        g.setGradientFill(juce::ColourGradient(amber.withAlpha(level * 0.64f), centre,
+                            amber.withAlpha(0.0f), centre.translated(16.0f, 0.0f), true));
+        g.fillEllipse(juce::Rectangle<float>(32.0f, 32.0f).withCentre(centre));
     }
 }
 
-void drawLedWindow(juce::Graphics& g, const filth::DriveStages& stages)
+void drawLedWindow(juce::Graphics& g, float amount)
 {
     g.setColour(juce::Colours::black.withAlpha(0.6f));
     g.fillRoundedRectangle(ledHousing.expanded(2.0f).translated(0.0f, 3.0f), 12.0f);
@@ -47,14 +49,18 @@ void drawLedWindow(juce::Graphics& g, const filth::DriveStages& stages)
     g.setColour(juce::Colour(0xff130f15));
     g.fillRoundedRectangle(cavity, 9.0f);
     const auto centre = cavity.getCentre();
-    drawSmdLed(g, centre.translated(-45.0f, 0.0f), juce::Colour(0xffcdff4e), stages.overdrive);
-    drawSmdLed(g, centre, juce::Colour(0xffffa62b), stages.clipping);
-    drawSmdLed(g, centre.translated(45.0f, 0.0f), juce::Colour(0xffff3d9c), stages.folding);
+    constexpr int ledCount = 5;
+    for (int i = 0; i < ledCount; ++i)
+    {
+        const auto offset = static_cast<float>(i - ledCount / 2) * 31.0f;
+        const auto level = std::clamp(amount * ledCount - static_cast<float>(i), 0.0f, 1.0f);
+        drawSmdLed(g, centre.translated(offset, 0.0f), level);
+    }
 
     // Tinted acrylic with a reflected light strip over the LED packages.
-    juce::ColourGradient acrylic(juce::Colour(0x65544862), cavity.getTopLeft(),
-                                 juce::Colour(0x5c17101f), cavity.getBottomLeft(), false);
-    acrylic.addColour(0.42, juce::Colour(0x1f48334b));
+    juce::ColourGradient acrylic(juce::Colour(0x65544c3e), cavity.getTopLeft(),
+                                 juce::Colour(0x5c17120d), cavity.getBottomLeft(), false);
+    acrylic.addColour(0.42, juce::Colour(0x1f4b3d33));
     g.setGradientFill(acrylic);
     g.fillRoundedRectangle(cavity, 9.0f);
     g.setColour(juce::Colours::white.withAlpha(0.22f));
@@ -131,12 +137,24 @@ FilthAudioProcessorEditor::FilthAudioProcessorEditor(FilthAudioProcessor& p)
     filthKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     filthKnob.setRotaryParameters(juce::MathConstants<float>::pi * 1.23f,
                                  juce::MathConstants<float>::pi * 2.77f, true);
-    filthKnob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 78, 27);
-    filthKnob.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xfff2eed1));
-    filthKnob.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff241b24));
-    filthKnob.setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff171018));
+    filthKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     filthKnob.setLookAndFeel(&filthLookAndFeel);
-    filthKnob.onValueChange = [this] { repaint(ledHousing.getSmallestIntegerContainer().expanded(8)); };
+    filthKnob.onDragStart = [this]
+    {
+        adjustingKnob = true;
+        repaint(knobReadout);
+    };
+    filthKnob.onDragEnd = [this]
+    {
+        adjustingKnob = false;
+        repaint(knobReadout);
+    };
+    filthKnob.onValueChange = [this]
+    {
+        repaint(ledHousing.getSmallestIntegerContainer().expanded(8));
+        if (adjustingKnob)
+            repaint(knobReadout);
+    };
     addAndMakeVisible(filthKnob);
 
     filthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -151,12 +169,21 @@ FilthAudioProcessorEditor::~FilthAudioProcessorEditor()
 
 void FilthAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff241b24));
+    g.fillAll(juce::Colour(0xff1b1913));
     g.drawImage(faceplate, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
-    drawLedWindow(g, filth::DriveStages(static_cast<float>(filthKnob.getValue())));
+    drawLedWindow(g, static_cast<float>(filthKnob.getValue()));
+
+    if (adjustingKnob)
+    {
+        g.setColour(juce::Colour(0xf01b1913));
+        g.fillRoundedRectangle(knobReadout.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xffffdfaa));
+        g.setFont(juce::FontOptions(15.0f).withStyle("Bold"));
+        g.drawText(filthKnob.getTextFromValue(filthKnob.getValue()), knobReadout, juce::Justification::centred);
+    }
 }
 
 void FilthAudioProcessorEditor::resized()
 {
-    filthKnob.setBounds(83, 149, 250, 253);
+    filthKnob.setBounds(83, 149, 250, 226);
 }

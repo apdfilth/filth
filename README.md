@@ -1,3 +1,4 @@
+<img width="272" height="319" alt="Screenshot_20261115_143832" src="https://github.com/user-attachments/assets/dae96f9a-ff2b-4c9f-8749-785277005a53" />
 # Filth
 
 Single-knob **VST3 / LV2 / Standalone** audio plugin built with JUCE and CMake.

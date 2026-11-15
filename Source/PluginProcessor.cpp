@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "FilthResponse.h"
 #include <algorithm>
 #include <cmath>
 
@@ -28,7 +29,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout FilthAudioProcessor::createP
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f),
         0.0f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-            [](float value, int) { return juce::String(juce::roundToInt(value * 100.0f)) + "%"; })));
+            [](float value, int) { return juce::String(juce::roundToInt(value * 100.0f)) + "%"; })
+            .withValueFromStringFunction([](const juce::String& text)
+            {
+                const auto value = text.getFloatValue();
+                const bool isPercent = text.trimEnd().endsWithChar('%') || value > 1.0f;
+                return std::clamp(isPercent ? value * 0.01f : value, 0.0f, 1.0f);
+            })));
     return layout;
 }
 
@@ -54,6 +61,9 @@ void FilthAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     compressor.prepare(spec);
     compressor.setAttack(3.0f);
     compressor.setRelease(60.0f);
+    dcBlocker.setType(juce::dsp::FirstOrderTPTFilterType::highpass);
+    dcBlocker.prepare(spec);
+    dcBlocker.setCutoffFrequency(15.0f);
 
     // 4x (2^2) linear-phase FIR oversampling with integer latency for exact DAW PDC
     oversampler = std::make_unique<juce::dsp::Oversampling<float>>(
@@ -69,20 +79,28 @@ void FilthAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     filthSmoothed.setCurrentAndTargetValue(filthParam->load());
 
     const int totalLatency = juce::roundToInt(oversampler->getLatencyInSamples()) + kFftSize;
+    dryDelay.setSize(numChannels, totalLatency);
+    dryBlock.setSize(numChannels, static_cast<int>(spec.maximumBlockSize));
+    knobValues.resize(spec.maximumBlockSize);
+    reset();
     setLatencySamples(totalLatency);
 }
 
 void FilthAudioProcessor::releaseResources()
 {
-    if (oversampler != nullptr)
-        oversampler->reset();
+    reset();
 }
 
 void FilthAudioProcessor::reset()
 {
     compressor.reset();
+    dcBlocker.reset();
     if (oversampler != nullptr)
         oversampler->reset();
+
+    dryDelay.clear();
+    dryWritePos = 0;
+    filthSmoothed.setCurrentAndTargetValue(filthParam->load());
 
     for (auto& ch : stftChannels)
         ch.clear();
@@ -95,69 +113,96 @@ void FilthAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
     const int totalNumInputChannels  = getTotalNumInputChannels();
     const int totalNumOutputChannels = getTotalNumOutputChannels();
-    const int numSamples             = buffer.getNumSamples();
-
     for (int i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear(i, 0, numSamples);
+        buffer.clear(i, 0, buffer.getNumSamples());
 
-    if (numSamples == 0 || oversampler == nullptr)
+    if (buffer.getNumSamples() == 0 || oversampler == nullptr)
         return;
 
     filthSmoothed.setTargetValue(filthParam->load());
-    const float blockFilth = filthSmoothed.getCurrentValue();
-
-    // 1. High-ratio compression (1:1 -> 20:1, threshold 0 dB -> -32 dB)
-    compressor.setThreshold(-32.0f * blockFilth);
-    compressor.setRatio(1.0f + 19.0f * blockFilth);
-
-    juce::dsp::AudioBlock<float> block(buffer);
-    juce::dsp::ProcessContextReplacing<float> context(block);
-    compressor.process(context);
-
-    // Smoothly advance knob across the block and apply compressor makeup gain before clipping
-    float endFilth = blockFilth;
-    for (int s = 0; s < numSamples; ++s)
+    const auto block = juce::dsp::AudioBlock<float>(buffer).getSubsetChannelBlock(
+        0, static_cast<size_t>(totalNumOutputChannels));
+    for (size_t offset = 0; offset < block.getNumSamples();)
     {
-        endFilth = filthSmoothed.getNextValue();
-        const float makeup = juce::Decibels::decibelsToGain(endFilth * 13.5f);
-        for (int ch = 0; ch < totalNumOutputChannels; ++ch)
-            buffer.getWritePointer(ch)[s] *= makeup;
+        const size_t count = std::min(knobValues.size(), block.getNumSamples() - offset);
+        processAudio(block.getSubBlock(offset, count));
+        offset += count;
+    }
+}
+
+void FilthAudioProcessor::processAudio(juce::dsp::AudioBlock<float> block) noexcept
+{
+    const auto numSamples = block.getNumSamples();
+    const auto channels = block.getNumChannels();
+    const auto compression = filth::fadeIn(filthSmoothed.getCurrentValue(), 0.0f, 0.70f);
+
+    // Keep the dry signal aligned to the oversampler and STFT, even during automation.
+    for (size_t s = 0; s < numSamples; ++s)
+    {
+        knobValues[s] = filthSmoothed.getNextValue();
+        for (size_t ch = 0; ch < channels; ++ch)
+        {
+            auto* delay = dryDelay.getWritePointer(static_cast<int>(ch));
+            dryBlock.getWritePointer(static_cast<int>(ch))[s] = delay[dryWritePos];
+            delay[dryWritePos] = block.getChannelPointer(ch)[s];
+        }
+        if (++dryWritePos == dryDelay.getNumSamples())
+            dryWritePos = 0;
     }
 
-    // 2. 4x Oversampled Soft Clipper (normalized tanh: transparent at 0%, +21 dB drive at 100%)
-    auto upsampledBlock = oversampler->processSamplesUp(block);
-    const float drive   = 1.0e-3f + 11.5f * (endFilth * endFilth);
-    const float invNorm = 1.0f / std::tanh(drive);
+    compressor.setThreshold(-30.0f * compression);
+    compressor.setRatio(1.0f + 15.0f * compression);
+    compressor.process(juce::dsp::ProcessContextReplacing<float>(block));
 
-    const size_t osChannels = upsampledBlock.getNumChannels();
-    const size_t osSamples  = upsampledBlock.getNumSamples();
-    for (size_t ch = 0; ch < osChannels; ++ch)
+    // Each stage blends into the output of the previous stage at 4x the sample rate.
+    auto upsampledBlock = oversampler->processSamplesUp(block);
+    const size_t oversamplingFactor = oversampler->getOversamplingFactor();
+    for (size_t s = 0; s < numSamples; ++s)
     {
-        float* data = upsampledBlock.getChannelPointer(ch);
-        for (size_t s = 0; s < osSamples; ++s)
-            data[s] = std::tanh(drive * data[s]) * invNorm;
+        const filth::DriveStages stages(knobValues[s]);
+        const float overdriveGain = 1.0f + 10.0f * stages.overdrive;
+        const float clippingGain = 1.0f + 3.5f * stages.clipping;
+        const float foldingGain = 1.0f + 4.0f * stages.folding;
+
+        for (size_t ch = 0; ch < channels; ++ch)
+        {
+            float* samples = upsampledBlock.getChannelPointer(ch) + s * oversamplingFactor;
+            for (size_t os = 0; os < oversamplingFactor; ++os)
+            {
+                float x = samples[os];
+                if (stages.overdrive > 0.0f)
+                    x = std::lerp(x, std::tanh(x * overdriveGain), stages.overdrive);
+                if (stages.clipping > 0.0f)
+                    x = std::lerp(x, std::clamp(x * clippingGain, -0.57f, 0.87f), stages.clipping);
+                if (stages.folding > 0.0f)
+                {
+                    const float driven = x * foldingGain;
+                    const float wrapped = driven - 4.0f * std::floor((driven + 1.0f) * 0.25f);
+                    x = std::lerp(x, 1.0f - std::abs(wrapped - 1.0f), stages.folding);
+                }
+                samples[os] = x;
+            }
+        }
     }
     oversampler->processSamplesDown(block);
+    dcBlocker.process(juce::dsp::ProcessContextReplacing<float>(block));
 
-    // 3. Spectral MP3 Artifact Stage + Post-Gibbs Safety Ceiling (-0.9 dBFS -> 0 dBFS soft knee)
-    const size_t activeCh = std::min(static_cast<size_t>(totalNumOutputChannels), stftChannels.size());
-    for (size_t ch = 0; ch < activeCh; ++ch)
+    for (size_t ch = 0; ch < channels; ++ch)
     {
-        float* data = buffer.getWritePointer(static_cast<int>(ch));
-        auto& stft  = stftChannels[ch];
-
-        for (int s = 0; s < numSamples; ++s)
+        float* data = block.getChannelPointer(ch);
+        const float* dry = dryBlock.getReadPointer(static_cast<int>(ch));
+        for (size_t s = 0; s < numSamples; ++s)
         {
-            float y = processStftSample(stft, data[s], endFilth);
+            const float amount = knobValues[s];
+            const float midSweepTrim = filth::fadeIn(amount, 0.0f, 0.50f)
+                                     * (1.0f - filth::fadeIn(amount, 0.50f, 0.80f));
+            float wet = processStftSample(stftChannels[ch], data[s], amount) * (1.0f - 0.35f * midSweepTrim);
+            const float peak = std::abs(wet);
+            if (peak > 0.9f)
+                wet = std::copysign(0.9f + 0.1f * std::tanh((peak - 0.9f) * 10.0f), wet);
 
-            const float absY = std::abs(y);
-            if (endFilth > 0.001f && absY > 0.9f)
-            {
-                const float compressed = 0.9f + 0.1f * std::tanh((absY - 0.9f) / 0.1f);
-                y = std::copysign(compressed, y);
-            }
-
-            data[s] = y;
+            const float mix = filth::fadeIn(amount, 0.0f, 0.18f);
+            data[s] = std::lerp(dry[s], wet, mix);
         }
     }
 }
@@ -178,8 +223,15 @@ float FilthAudioProcessor::processStftSample(ChannelStft& state, float inputSamp
 
         fft.performRealOnlyForwardTransform(fftWorkBuffer.data(), true);
 
-        if (filth > 0.0005f)
-            applyMp3SpectralArtifacts(filth);
+        const float codec = filth::fadeIn(filth, 0.18f, 1.0f);
+        if (codec > 0.0f)
+        {
+            const int cutoff = applyMp3SpectralArtifacts(codec);
+            const float corruption = std::sqrt(filth::fadeIn(filth, 0.50f, 1.0f));
+            if (corruption > 0.0f)
+                corruptSpectrum(corruption, cutoff, state.frame);
+        }
+        ++state.frame;
 
         fft.performRealOnlyInverseTransform(fftWorkBuffer.data());
 
@@ -196,9 +248,9 @@ float FilthAudioProcessor::processStftSample(ChannelStft& state, float inputSamp
     return outSample;
 }
 
-void FilthAudioProcessor::applyMp3SpectralArtifacts(float filth) noexcept
+int FilthAudioProcessor::applyMp3SpectralArtifacts(float intensity) noexcept
 {
-    const float mp3       = std::pow(filth, 1.25f);
+    const float mp3       = std::pow(intensity, 1.25f);
     const float nyquist   = static_cast<float>(currentSampleRate * 0.5);
     const float minCutoff = std::min(3600.0f, nyquist * 0.8f);
     const float cutoffHz  = nyquist * std::pow(minCutoff / nyquist, mp3);
@@ -271,6 +323,46 @@ void FilthAudioProcessor::applyMp3SpectralArtifacts(float filth) noexcept
     // Keep DC and Nyquist strictly real-valued
     fftWorkBuffer[1]                                    = 0.0f;
     fftWorkBuffer[static_cast<size_t>(2 * kHopSize + 1)] = 0.0f;
+    return cutoffBin;
+}
+
+void FilthAudioProcessor::corruptSpectrum(float amount, int cutoffBin, uint32_t frame) noexcept
+{
+    // Linked frame and bin patterns keep correlated stereo inputs correlated.
+    uint32_t pattern = (frame + 1u) * 0x9e3779b9u;
+    const int band = std::min(kHopSize - 1, cutoffBin + std::max(24, cutoffBin / 2));
+    const int shift = 7 + static_cast<int>((pattern >> 24) % 19u);
+    const float dropout = (pattern >> 28) < 3u ? 0.24f : 1.0f;
+    corruptedSpectrum.fill(0.0f);
+
+    for (int bin = 1; bin <= std::min(cutoffBin, kHopSize - 1); ++bin)
+    {
+        pattern ^= pattern << 13;
+        pattern ^= pattern >> 17;
+        pattern ^= pattern << 5;
+        float re = fftWorkBuffer[static_cast<size_t>(2 * bin)];
+        float im = fftWorkBuffer[static_cast<size_t>(2 * bin + 1)];
+        if ((pattern & 1u) != 0u)
+            std::swap(re, im);
+        if ((pattern & 2u) != 0u)
+            re = -re;
+        if ((pattern & 4u) != 0u)
+            im = -im;
+
+        const int shifted = 1 + (bin - 1 + shift) % band;
+        const int scattered = 1 + (shifted - 1 + band / 2
+                                    + static_cast<int>((pattern >> 8) % 17u)) % band;
+        corruptedSpectrum[static_cast<size_t>(2 * shifted)] += re * dropout;
+        corruptedSpectrum[static_cast<size_t>(2 * shifted + 1)] += im * dropout;
+        corruptedSpectrum[static_cast<size_t>(2 * scattered)] -= im * 0.55f * dropout;
+        corruptedSpectrum[static_cast<size_t>(2 * scattered + 1)] += re * 0.55f * dropout;
+    }
+
+    // Compensate for the power lost when crossfading between decorrelated spectra.
+    const float intact = 1.0f - amount;
+    const float gain = 1.0f / std::hypot(intact, amount);
+    for (size_t i = 0; i <= static_cast<size_t>(2 * kHopSize + 1); ++i)
+        fftWorkBuffer[i] = gain * std::lerp(fftWorkBuffer[i], corruptedSpectrum[i], amount);
 }
 
 void FilthAudioProcessor::getStateInformation(juce::MemoryBlock& destData)

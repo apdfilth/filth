@@ -52,6 +52,7 @@ private:
         std::array<float, kFftSize> outputAccum {};
         std::array<float, kHopSize> readyOutput {};
         int pos = 0;
+        uint32_t frame = 0;
 
         void clear() noexcept
         {
@@ -59,22 +60,31 @@ private:
             outputAccum.fill(0.0f);
             readyOutput.fill(0.0f);
             pos = 0;
+            frame = 0;
         }
     };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    void processAudio(juce::dsp::AudioBlock<float> block) noexcept;
     float processStftSample(ChannelStft& state, float inputSample, float filth) noexcept;
-    void applyMp3SpectralArtifacts(float filth) noexcept;
+    int applyMp3SpectralArtifacts(float intensity) noexcept;
+    void corruptSpectrum(float amount, int cutoffBin, uint32_t frame) noexcept;
 
     std::atomic<float>* filthParam = nullptr;
     juce::SmoothedValue<float> filthSmoothed;
 
     juce::dsp::Compressor<float> compressor;
+    juce::dsp::FirstOrderTPTFilter<float> dcBlocker;
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    juce::AudioBuffer<float> dryDelay;
+    juce::AudioBuffer<float> dryBlock;
+    std::vector<float> knobValues;
+    int dryWritePos = 0;
 
     juce::dsp::FFT fft { kFftOrder };
     std::array<float, kFftSize> sineWindow {};
     std::array<float, kFftSize * 2> fftWorkBuffer {};
+    std::array<float, kFftSize * 2> corruptedSpectrum {};
     std::vector<ChannelStft> stftChannels;
 
     double currentSampleRate = 48000.0;

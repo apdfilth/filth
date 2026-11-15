@@ -24,6 +24,7 @@ private:
     juce::Image faceplate;
 
     juce::Slider filthKnob;
+    bool adjustingKnob = false;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> filthAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FilthAudioProcessorEditor)

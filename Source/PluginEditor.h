@@ -20,11 +20,10 @@ public:
     void resized() override;
 
 private:
-    FilthAudioProcessor& processorRef;
     FilthLookAndFeel filthLookAndFeel;
+    juce::Image faceplate;
 
     juce::Slider filthKnob;
-    juce::Label filthLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> filthAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FilthAudioProcessorEditor)

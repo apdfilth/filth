@@ -65,20 +65,23 @@ void FilthAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     dcBlocker.prepare(spec);
     dcBlocker.setCutoffFrequency(15.0f);
 
-    // 4x (2^2) linear-phase FIR oversampling with integer latency for exact DAW PDC
-    oversampler = std::make_unique<juce::dsp::Oversampling<float>>(
-        static_cast<size_t>(numChannels),
-        2,
-        juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple,
-        true,
-        true);
-    oversampler->initProcessing(static_cast<size_t>(std::max(1, samplesPerBlock)));
+    // Oversample each side of the host-rate STFT with integer latency for delay compensation.
+    const auto makeOversampler = [&spec]
+    {
+        auto oversampler = std::make_unique<juce::dsp::Oversampling<float>>(
+            spec.numChannels, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
+        oversampler->initProcessing(spec.maximumBlockSize);
+        return oversampler;
+    };
+    preCodecOversampler = makeOversampler();
+    postCodecOversampler = makeOversampler();
 
     stftChannels.assign(static_cast<size_t>(numChannels), ChannelStft {});
     filthSmoothed.reset(sampleRate, 0.02);
     filthSmoothed.setCurrentAndTargetValue(filthParam->load());
 
-    const int totalLatency = juce::roundToInt(oversampler->getLatencyInSamples()) + kFftSize;
+    const int totalLatency = juce::roundToInt(preCodecOversampler->getLatencyInSamples()
+                                             + postCodecOversampler->getLatencyInSamples()) + kFftSize;
     dryDelay.setSize(numChannels, totalLatency);
     dryBlock.setSize(numChannels, static_cast<int>(spec.maximumBlockSize));
     knobValues.resize(spec.maximumBlockSize);
@@ -95,8 +98,10 @@ void FilthAudioProcessor::reset()
 {
     compressor.reset();
     dcBlocker.reset();
-    if (oversampler != nullptr)
-        oversampler->reset();
+    if (preCodecOversampler != nullptr)
+        preCodecOversampler->reset();
+    if (postCodecOversampler != nullptr)
+        postCodecOversampler->reset();
 
     dryDelay.clear();
     dryWritePos = 0;
@@ -116,7 +121,7 @@ void FilthAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     for (int i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear(i, 0, buffer.getNumSamples());
 
-    if (buffer.getNumSamples() == 0 || oversampler == nullptr)
+    if (buffer.getNumSamples() == 0 || postCodecOversampler == nullptr)
         return;
 
     filthSmoothed.setTargetValue(filthParam->load());
@@ -136,7 +141,7 @@ void FilthAudioProcessor::processAudio(juce::dsp::AudioBlock<float> block) noexc
     const auto channels = block.getNumChannels();
     const auto compression = filth::fadeIn(filthSmoothed.getCurrentValue(), 0.0f, 0.70f);
 
-    // Keep the dry signal aligned to the oversampler and STFT, even during automation.
+    // Keep the dry signal aligned to both oversamplers and the STFT during automation.
     for (size_t s = 0; s < numSamples; ++s)
     {
         knobValues[s] = filthSmoothed.getNextValue();
@@ -154,37 +159,14 @@ void FilthAudioProcessor::processAudio(juce::dsp::AudioBlock<float> block) noexc
     compressor.setRatio(1.0f + 15.0f * compression);
     compressor.process(juce::dsp::ProcessContextReplacing<float>(block));
 
-    // Each stage blends into the output of the previous stage at 4x the sample rate.
-    auto upsampledBlock = oversampler->processSamplesUp(block);
-    const size_t oversamplingFactor = oversampler->getOversamplingFactor();
-    for (size_t s = 0; s < numSamples; ++s)
+    applyPreCodecDrive(block);
+    for (size_t ch = 0; ch < channels; ++ch)
     {
-        const filth::DriveStages stages(knobValues[s]);
-        const float overdriveGain = 1.0f + 10.0f * stages.overdrive;
-        const float clippingGain = 1.0f + 3.5f * stages.clipping;
-        const float foldingGain = 1.0f + 4.0f * stages.folding;
-
-        for (size_t ch = 0; ch < channels; ++ch)
-        {
-            float* samples = upsampledBlock.getChannelPointer(ch) + s * oversamplingFactor;
-            for (size_t os = 0; os < oversamplingFactor; ++os)
-            {
-                float x = samples[os];
-                if (stages.overdrive > 0.0f)
-                    x = std::lerp(x, std::tanh(x * overdriveGain), stages.overdrive);
-                if (stages.clipping > 0.0f)
-                    x = std::lerp(x, std::clamp(x * clippingGain, -0.57f, 0.87f), stages.clipping);
-                if (stages.folding > 0.0f)
-                {
-                    const float driven = x * foldingGain;
-                    const float wrapped = driven - 4.0f * std::floor((driven + 1.0f) * 0.25f);
-                    x = std::lerp(x, 1.0f - std::abs(wrapped - 1.0f), stages.folding);
-                }
-                samples[os] = x;
-            }
-        }
+        auto* data = block.getChannelPointer(ch);
+        for (size_t s = 0; s < numSamples; ++s)
+            data[s] = processStftSample(stftChannels[ch], data[s], knobValues[s]);
     }
-    oversampler->processSamplesDown(block);
+    applyPostCodecDrive(block);
     dcBlocker.process(juce::dsp::ProcessContextReplacing<float>(block));
 
     for (size_t ch = 0; ch < channels; ++ch)
@@ -196,7 +178,7 @@ void FilthAudioProcessor::processAudio(juce::dsp::AudioBlock<float> block) noexc
             const float amount = knobValues[s];
             const float midSweepTrim = filth::fadeIn(amount, 0.0f, 0.50f)
                                      * (1.0f - filth::fadeIn(amount, 0.50f, 0.80f));
-            float wet = processStftSample(stftChannels[ch], data[s], amount) * (1.0f - 0.35f * midSweepTrim);
+            float wet = data[s] * (1.0f - 0.35f * midSweepTrim);
             const float peak = std::abs(wet);
             if (peak > 0.9f)
                 wet = std::copysign(0.9f + 0.1f * std::tanh((peak - 0.9f) * 10.0f), wet);
@@ -205,6 +187,55 @@ void FilthAudioProcessor::processAudio(juce::dsp::AudioBlock<float> block) noexc
             data[s] = std::lerp(dry[s], wet, mix);
         }
     }
+}
+
+void FilthAudioProcessor::applyPreCodecDrive(juce::dsp::AudioBlock<float> block) noexcept
+{
+    auto upsampled = preCodecOversampler->processSamplesUp(block);
+    const auto factor = preCodecOversampler->getOversamplingFactor();
+    for (size_t s = 0; s < block.getNumSamples(); ++s)
+    {
+        const float overdrive = filth::DriveStages(knobValues[s]).overdrive;
+        if (overdrive == 0.0f)
+            continue;
+
+        const float gain = 1.0f + 10.0f * overdrive;
+        for (size_t ch = 0; ch < upsampled.getNumChannels(); ++ch)
+        {
+            auto* samples = upsampled.getChannelPointer(ch) + s * factor;
+            for (size_t os = 0; os < factor; ++os)
+                samples[os] = std::lerp(samples[os], std::tanh(samples[os] * gain), overdrive);
+        }
+    }
+    preCodecOversampler->processSamplesDown(block);
+}
+
+void FilthAudioProcessor::applyPostCodecDrive(juce::dsp::AudioBlock<float> block) noexcept
+{
+    auto upsampled = postCodecOversampler->processSamplesUp(block);
+    const auto factor = postCodecOversampler->getOversamplingFactor();
+    for (size_t s = 0; s < block.getNumSamples(); ++s)
+    {
+        const filth::DriveStages stages(knobValues[s]);
+        if (stages.clipping == 0.0f && stages.folding == 0.0f)
+            continue;
+
+        const float clippingGain = 1.0f + 3.5f * stages.clipping;
+        const float foldingGain = 1.0f + 4.0f * stages.folding;
+        for (size_t ch = 0; ch < upsampled.getNumChannels(); ++ch)
+        {
+            auto* samples = upsampled.getChannelPointer(ch) + s * factor;
+            for (size_t os = 0; os < factor; ++os)
+            {
+                const float x = samples[os];
+                const float clipped = std::lerp(x, std::clamp(x * clippingGain, -0.57f, 0.87f), stages.clipping);
+                const float driven = clipped * foldingGain;
+                const float wrapped = driven - 4.0f * std::floor((driven + 1.0f) * 0.25f);
+                samples[os] = std::lerp(clipped, 1.0f - std::abs(wrapped - 1.0f), stages.folding);
+            }
+        }
+    }
+    postCodecOversampler->processSamplesDown(block);
 }
 
 float FilthAudioProcessor::processStftSample(ChannelStft& state, float inputSample, float filth) noexcept

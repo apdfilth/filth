@@ -30,7 +30,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.05; }
+    double getTailLengthSeconds() const override;
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -46,8 +46,7 @@ public:
         float targetAmount;
         float amount;
         float compressorAmount;
-        float spectralAmount;
-        std::uint32_t frame;
+        std::array<float, filth::codecPasses.size()> spectralAmounts;
         float sampleRate;
     };
 
@@ -68,7 +67,6 @@ private:
         std::array<float, kFftSize> outputAccum {};
         std::array<float, kHopSize> readyOutput {};
         int pos = 0;
-        uint32_t frame = 0;
         float frameAmount = 0.0f;
 
         void clear() noexcept
@@ -77,26 +75,26 @@ private:
             outputAccum.fill(0.0f);
             readyOutput.fill(0.0f);
             pos = 0;
-            frame = 0;
             frameAmount = 0.0f;
         }
     };
+
+    using CodecChain = std::array<ChannelStft, filth::codecPasses.size()>;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void processAudio(juce::dsp::AudioBlock<float> block, filth::StageMask mask) noexcept;
     void applyPreCodecDrive(juce::dsp::AudioBlock<float> block, bool enabled) noexcept;
     void applyPostCodecDrive(juce::dsp::AudioBlock<float> block, filth::StageMask mask) noexcept;
-    float processStftSample(ChannelStft& state, float inputSample, float amount, filth::StageMask mask) noexcept;
-    int applyMp3SpectralArtifacts(const filth::SpectralSettings&, filth::StageMask mask) noexcept;
-    void corruptSpectrum(float amount, int cutoffBin, uint32_t frame) noexcept;
+    float processStftSample(ChannelStft& state, float inputSample, float amount,
+                            const filth::CodecPass&, filth::StageMask mask) noexcept;
+    void applyMp3SpectralArtifacts(const filth::SpectralSettings&, filth::StageMask mask) noexcept;
 
     std::atomic<float>* filthParam = nullptr;
     juce::SmoothedValue<float> filthSmoothed;
     std::atomic<filth::StageMask> debugStages { filth::allStages };
     std::atomic<float> debugAmount { 0.0f };
     std::atomic<float> debugCompressorAmount { 0.0f };
-    std::atomic<float> debugSpectralAmount { 0.0f };
-    std::atomic<std::uint32_t> debugFrame { 0 };
+    std::array<std::atomic<float>, filth::codecPasses.size()> debugSpectralAmounts {};
     std::atomic<float> debugSampleRate { 48000.0f };
 
     juce::dsp::Compressor<float> compressor;
@@ -111,8 +109,7 @@ private:
     juce::dsp::FFT fft { kFftOrder };
     std::array<float, kFftSize> sineWindow {};
     std::array<float, kFftSize * 2> fftWorkBuffer {};
-    std::array<float, kFftSize * 2> corruptedSpectrum {};
-    std::vector<ChannelStft> stftChannels;
+    std::vector<CodecChain> stftChannels;
 
     double currentSampleRate = 48000.0;
 

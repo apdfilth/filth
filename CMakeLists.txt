@@ -35,7 +35,12 @@ target_sources(Filth PRIVATE
     Source/PluginEditor.cpp
 )
 
-juce_add_binary_data(FilthArtwork SOURCES Assets/FilthPedal.jpg Assets/FilthKnob.png)
+juce_add_binary_data(FilthArtwork SOURCES
+    Assets/FilthPedal.jpg
+    Assets/FilthScribble.png
+    Assets/FilthSunburst.png
+    Assets/FilthKnob.png
+)
 
 target_compile_definitions(Filth PUBLIC
     JUCE_WEB_BROWSER=0

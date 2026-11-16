@@ -5,8 +5,8 @@
 
 namespace
 {
-const juce::Rectangle<float> ledHousing { 116.0f, 421.0f, 184.0f, 50.0f };
-const juce::Rectangle<int> knobReadout { 172, 379, 72, 25 };
+const juce::Rectangle<float> ledHousing { 116.0f, 445.0f, 184.0f, 44.0f };
+const juce::Rectangle<int> knobReadout { 310, 166, 64, 23 };
 
 juce::Point<float> pointOnDial(juce::Point<float> centre, float radius, float angle)
 {
@@ -147,13 +147,23 @@ public:
         const auto live = processor.getDebugValues();
         const filth::Compression compression(live.compressorAmount);
         const filth::DriveStages drives(live.amount);
-        const filth::SpectralSettings spectral(live.spectralAmount);
-        const auto frame = filth::framePattern(live.frame);
-        const float cutoff = static_cast<float>(spectral.cutoffBin(live.sampleRate)) * live.sampleRate / filth::fftSize;
+        const filth::SpectralSettings spectral(live.spectralAmounts[0], filth::codecPasses[0]);
+        const filth::SpectralSettings secondPass(live.spectralAmounts[1], filth::codecPasses[1]);
+        const filth::SpectralSettings thirdPass(live.spectralAmounts[2], filth::codecPasses[2]);
+        const auto cutoff = [&](const filth::SpectralSettings& settings)
+        {
+            return juce::String(static_cast<float>(settings.cutoffBin(live.sampleRate))
+                               * live.sampleRate / (1000.0f * filth::fftSize), 2) + " kHz";
+        };
         const auto percent = [](float value) { return juce::String(juce::roundToInt(value * 100.0f)) + "%"; };
         const auto driveText = [&](float blend, float gain)
         {
             return percent(blend) + " blend  /  " + juce::String(gain, 2) + "× gain";
+        };
+        const auto passText = [&](const filth::SpectralSettings& settings)
+        {
+            return percent(settings.strength) + " strength / " + cutoff(settings)
+                + " / " + percent(settings.quantStep()) + " step";
         };
 
         g.setColour(juce::Colour(0xffd7c7b0));
@@ -166,13 +176,13 @@ public:
         const juce::String values[] {
             juce::String(compression.threshold(), 1) + " dB  /  " + juce::String(compression.ratio(), 1) + ":1  /  3/60 ms",
             driveText(drives.overdrive, drives.overdriveGain()),
-            juce::String(cutoff / 1000.0f, 2) + " kHz  /  " + juce::String(filth::fftSize) + "-sample FFT",
+            cutoff(spectral) + "  /  " + juce::String(filth::fftSize) + "-sample FFT",
             percent(spectral.bandGate()) + " band gate  /  " + percent(spectral.binGate()) + " bin gate",
             juce::String(spectral.quantStep() * 100.0f, 1) + "% of band peak per step",
-            percent(spectral.corruption) + " blend  /  +" + juce::String(filth::binShift(frame))
-                + " bins  /  " + percent(filth::dropoutGain(frame)) + " gain",
-            driveText(drives.clipping, drives.clipGain()) + "  /  −.57 / +.87",
-            driveText(drives.folding, drives.foldGain()),
+            passText(secondPass),
+            passText(thirdPass),
+            driveText(drives.fold1, drives.fold1Gain()),
+            driveText(drives.fold2, drives.fold2Gain()),
             juce::String(filth::dcCutoffHz, 0) + " Hz high-pass",
             juce::String(juce::Decibels::gainToDecibels(filth::outputGain(live.amount)), 2) + " dB gain",
             juce::String(juce::Decibels::gainToDecibels(filth::ceilingKnee), 2) + " dBFS knee  /  0 dBFS ceiling",
@@ -206,7 +216,7 @@ public:
 private:
     static constexpr auto stageCount = static_cast<size_t>(filth::Stage::count);
     static constexpr int firstRowY = 91;
-    static constexpr int rowHeight = 31;
+    static constexpr int rowHeight = 29;
 
     struct Row
     {
@@ -232,6 +242,11 @@ private:
     filth::StageMask mask = filth::allStages;
 };
 
+FilthLookAndFeel::FilthLookAndFeel()
+    : knobImage(juce::ImageCache::getFromMemory(BinaryData::FilthKnob_png, BinaryData::FilthKnob_pngSize))
+{
+}
+
 void FilthLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                                        float sliderPos, float rotaryStartAngle,
                                        float rotaryEndAngle, juce::Slider&)
@@ -246,11 +261,11 @@ void FilthLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wid
     {
         const auto angle = std::lerp(rotaryStartAngle, rotaryEndAngle, static_cast<float>(tick) * 0.05f);
         const bool major = tick % 5 == 0;
-        const auto inner = pointOnDial(centre, radius + 12.0f, angle);
-        const auto outer = pointOnDial(centre, radius + (major ? 21.0f : 17.0f), angle);
+        const auto inner = pointOnDial(centre, radius + 6.0f, angle);
+        const auto outer = pointOnDial(centre, radius + (major ? 12.0f : 10.0f), angle);
         g.setColour(juce::Colour(0xff211d20));
         g.drawLine({ inner, outer }, major ? 3.6f : 1.8f);
-        g.setColour(juce::Colour(0xffe8e4b8).withAlpha(0.7f));
+        g.setColour(juce::Colour(0xffc7c0ab).withAlpha(0.68f));
         g.drawLine({ inner.translated(0.0f, -0.7f), outer.translated(0.0f, -0.7f) }, major ? 1.6f : 0.7f);
     }
 
@@ -258,37 +273,13 @@ void FilthLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wid
     g.setGradientFill(juce::ColourGradient(juce::Colours::black, shadowCentre,
         juce::Colours::transparentBlack, shadowCentre.translated(radius + 12.0f, 0.0f), true));
     g.fillEllipse(body.expanded(12.0f).withCentre(shadowCentre));
-    g.setColour(juce::Colour(0xff181317));
-    g.fillEllipse(body);
-
-    // Ribbed phenolic skirt. Its ridges rotate with the indicator.
-    for (int rib = 0; rib < 60; ++rib)
-    {
-        const float angle = indicatorAngle + juce::MathConstants<float>::twoPi * static_cast<float>(rib) / 60.0f;
-        const auto inner = pointOnDial(centre, radius - 10.0f, angle);
-        const auto edge = pointOnDial(centre, radius - 1.0f, angle);
-        const float sheen = 0.5f + 0.5f * std::cos(angle + 0.65f);
-        g.setColour(juce::Colour(0xff292229).interpolatedWith(juce::Colour(0xff796b70), sheen));
-        g.drawLine({ inner, edge }, 2.1f);
-    }
-
-    const auto cap = body.reduced(9.0f);
-    juce::ColourGradient surface(juce::Colour(0xff615357), cap.getTopLeft(),
-                                 juce::Colour(0xff1a151b), cap.getBottomRight(), false);
-    surface.addColour(0.45, juce::Colour(0xff30272d));
-    g.setGradientFill(surface);
-    g.fillEllipse(cap);
-    g.setColour(juce::Colour(0xff89767c).withAlpha(0.67f));
-    g.drawEllipse(cap.reduced(1.0f), 1.0f);
-    g.setColour(juce::Colour(0xff160f16));
-    g.drawEllipse(cap.reduced(4.0f), 1.0f);
-
-    const auto markerStart = pointOnDial(centre, radius * 0.45f, indicatorAngle);
-    const auto markerEnd = pointOnDial(centre, radius - 19.0f, indicatorAngle);
-    g.setColour(juce::Colour(0xff171219));
-    g.drawLine({ markerStart.translated(1.0f, 1.0f), markerEnd.translated(1.0f, 1.0f) }, 6.5f);
-    g.setColour(juce::Colour(0xfff1e9b9));
-    g.drawLine({ markerStart, markerEnd }, 4.5f);
+    const float diameter = radius * 2.15f; // Include the transparent margin around the photographed knob.
+    const auto transform = juce::AffineTransform::scale(diameter / static_cast<float>(knobImage.getWidth()),
+                                                        diameter / static_cast<float>(knobImage.getHeight()))
+        .translated(-diameter * 0.5f, -diameter * 0.5f)
+        .rotated(indicatorAngle)
+        .translated(centre.x, centre.y);
+    g.drawImageTransformed(knobImage, transform);
 }
 
 void FilthAudioProcessorEditor::DebugButton::paintButton(juce::Graphics& g, bool highlighted, bool down)
@@ -384,5 +375,5 @@ void FilthAudioProcessorEditor::resized()
     if (debugButton.getToggleState())
         filthKnob.setBounds(12, 37, getWidth() - 24, 27);
     else
-        filthKnob.setBounds(83, 149, 250, 226);
+        filthKnob.setBounds(100, 85, 216, 198);
 }

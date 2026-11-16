@@ -45,7 +45,7 @@ cmake --build build --config Release
 Install Apple's Command Line Tools with `xcode-select --install` if needed,
 then install CMake and Ninja with `brew install cmake ninja`.
 
-From the repository on fplab, run:
+From the repository root, run:
 
 ```bash
 ./scripts/build-macos-vst3.sh
@@ -57,25 +57,16 @@ and code signature, and writes `out/Filth-macos-vst3.zip`. The build keeps the
 plugin in the workspace. For a manual CMake build of all formats, pass
 `-DFILTH_COPY_PLUGIN_AFTER_BUILD=OFF` to get the same behavior.
 
-### Install and test on iufer-mbp
+### Install and test in Ableton Live
 
-From Terminal on iufer-mbp, copy the installer once using your existing fplab
-SSH login:
-
-```bash
-scp fplabadmin@fplab.local:/Users/fplabadmin/Desktop/VST/filth/scripts/install-macos-vst3.sh ~/Downloads/
-```
-
-For each new build, quit Live, then pull and install the latest ZIP:
+Quit Live and run the installer from the repository root.
 
 ```bash
-bash ~/Downloads/install-macos-vst3.sh fplabadmin@fplab.local:/Users/fplabadmin/Desktop/VST/filth/out/Filth-macos-vst3.zip
+./scripts/install-macos-vst3.sh out/Filth-macos-vst3.zip
 ```
 
-If `fplab.local` does not resolve, use the address or SSH alias you use to connect
-to fplab. If you copy the ZIP another way, pass its local path to the installer.
-The installer verifies the signature before replacing the bundle in
-`~/Library/Audio/Plug-Ins/VST3`.
+The installer verifies the signature and installs Filth in the current user's
+VST3 plug-in folder.
 
 1. Open Live and enable **Use VST3 Plug-In System Folders** in **Settings → Plug-Ins**.
    Look for **Filth** in the Plug-Ins browser. If it is missing, hold **Option** and click **Rescan**.

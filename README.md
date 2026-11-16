@@ -15,6 +15,9 @@ and spectral corruption, then asymmetric clipping and wavefolding. All three
 drives run at 4× oversampling. Five amber LEDs fill from left to right as FILTH
 increases. The percentage appears while you drag the knob.
 
+Click the upper-right corner screw to open the debug panel and solo or bypass
+individual stages. See the [signal-flow diagram and knob mappings](docs/signal-flow.md).
+
 ## Building
 
 ### Linux (Fedora)

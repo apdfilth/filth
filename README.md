@@ -1,3 +1,4 @@
+
 # Filth
 
 Single-knob **VST3 / LV2 / Standalone** audio plugin built with JUCE and CMake.
@@ -16,6 +17,13 @@ drives run at 4× oversampling. The percentage appears while you drag the knob.
 
 Click the upper-right corner screw to open the debug panel and solo or bypass
 individual stages. See the [signal-flow diagram and knob mappings](docs/signal-flow.md).
+
+<details>
+<summary>Original Filth interface</summary>
+
+<img width="272" height="319" alt="Original Filth interface" src="https://github.com/user-attachments/assets/dae96f9a-ff2b-4c9f-8749-785277005a53" />
+
+</details>
 
 ## Building
 

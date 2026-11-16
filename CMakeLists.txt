@@ -4,11 +4,13 @@ project(Filth VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(FILTH_COPY_PLUGIN_AFTER_BUILD "Copy built plug-ins into the local plug-in folders" ON)
+
 include(FetchContent)
 FetchContent_Declare(
     JUCE
     GIT_REPOSITORY      https://github.com/juce-framework/JUCE.git
-    GIT_TAG             master
+    GIT_TAG             9.0.5
     GIT_SHALLOW         TRUE
     UPDATE_DISCONNECTED TRUE
 )
@@ -20,7 +22,7 @@ juce_add_plugin(Filth
     NEEDS_MIDI_INPUT            FALSE
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
-    COPY_PLUGIN_AFTER_BUILD     TRUE
+    COPY_PLUGIN_AFTER_BUILD     ${FILTH_COPY_PLUGIN_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE    FlAu
     PLUGIN_CODE                 Flth
     LV2URI                      "https://filthaudio.example.com/plugins/filth"
@@ -33,6 +35,13 @@ target_sources(Filth PRIVATE
     Source/PluginEditor.cpp
 )
 
+juce_add_binary_data(FilthArtwork SOURCES
+    Assets/FilthPedal.jpg
+    Assets/FilthScribble.png
+    Assets/FilthSunburst.png
+    Assets/FilthKnob.png
+)
+
 target_compile_definitions(Filth PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -42,6 +51,7 @@ target_compile_definitions(Filth PUBLIC
 
 target_link_libraries(Filth
     PRIVATE
+        FilthArtwork
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC

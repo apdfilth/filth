@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FilthResponse.h"
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -39,11 +41,25 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    struct DebugValues
+    {
+        float targetAmount;
+        float amount;
+        float compressorAmount;
+        float spectralAmount;
+        std::uint32_t frame;
+        float sampleRate;
+    };
+
+    DebugValues getDebugValues() const noexcept;
+    void setDebugStages(filth::StageMask mask) noexcept { debugStages.store(mask, std::memory_order_relaxed); }
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static constexpr int kFftOrder = 10;
-    static constexpr int kFftSize  = 1 << kFftOrder; // 1024 samples (~21 ms @ 48 kHz, matches MP3 frame scale)
+    static constexpr int kFftSize  = filth::fftSize;
+    static_assert(kFftSize == (1 << kFftOrder));
     static constexpr int kHopSize  = kFftSize / 2;   // 50% overlap
 
     struct ChannelStft
@@ -53,6 +69,7 @@ private:
         std::array<float, kHopSize> readyOutput {};
         int pos = 0;
         uint32_t frame = 0;
+        float frameAmount = 0.0f;
 
         void clear() noexcept
         {
@@ -61,19 +78,26 @@ private:
             readyOutput.fill(0.0f);
             pos = 0;
             frame = 0;
+            frameAmount = 0.0f;
         }
     };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
-    void processAudio(juce::dsp::AudioBlock<float> block) noexcept;
-    void applyPreCodecDrive(juce::dsp::AudioBlock<float> block) noexcept;
-    void applyPostCodecDrive(juce::dsp::AudioBlock<float> block) noexcept;
-    float processStftSample(ChannelStft& state, float inputSample, float filth) noexcept;
-    int applyMp3SpectralArtifacts(float intensity) noexcept;
+    void processAudio(juce::dsp::AudioBlock<float> block, filth::StageMask mask) noexcept;
+    void applyPreCodecDrive(juce::dsp::AudioBlock<float> block, bool enabled) noexcept;
+    void applyPostCodecDrive(juce::dsp::AudioBlock<float> block, filth::StageMask mask) noexcept;
+    float processStftSample(ChannelStft& state, float inputSample, float amount, filth::StageMask mask) noexcept;
+    int applyMp3SpectralArtifacts(const filth::SpectralSettings&, filth::StageMask mask) noexcept;
     void corruptSpectrum(float amount, int cutoffBin, uint32_t frame) noexcept;
 
     std::atomic<float>* filthParam = nullptr;
     juce::SmoothedValue<float> filthSmoothed;
+    std::atomic<filth::StageMask> debugStages { filth::allStages };
+    std::atomic<float> debugAmount { 0.0f };
+    std::atomic<float> debugCompressorAmount { 0.0f };
+    std::atomic<float> debugSpectralAmount { 0.0f };
+    std::atomic<std::uint32_t> debugFrame { 0 };
+    std::atomic<float> debugSampleRate { 48000.0f };
 
     juce::dsp::Compressor<float> compressor;
     juce::dsp::FirstOrderTPTFilter<float> dcBlocker;

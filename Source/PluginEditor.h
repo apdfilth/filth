@@ -2,6 +2,8 @@
 
 #include "PluginProcessor.h"
 
+class FilthDebugPanel;
+
 class FilthLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
@@ -20,12 +22,20 @@ public:
     void resized() override;
 
 private:
+    struct DebugButton final : juce::Button
+    {
+        DebugButton() : juce::Button("Toggle audio path debug panel") {}
+        void paintButton(juce::Graphics&, bool highlighted, bool down) override;
+    };
+
     FilthLookAndFeel filthLookAndFeel;
     juce::Image faceplate;
 
     juce::Slider filthKnob;
     bool adjustingKnob = false;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> filthAttachment;
+    std::unique_ptr<FilthDebugPanel> debugPanel;
+    DebugButton debugButton;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FilthAudioProcessorEditor)
 };

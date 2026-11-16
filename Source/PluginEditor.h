@@ -34,6 +34,8 @@ private:
 
     FilthLookAndFeel filthLookAndFeel;
     juce::Image faceplate;
+    juce::Image scribble;
+    juce::Image sunburst;
 
     juce::Slider filthKnob;
     bool adjustingKnob = false;

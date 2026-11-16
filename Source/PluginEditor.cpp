@@ -5,68 +5,17 @@
 
 namespace
 {
-const juce::Rectangle<float> ledHousing { 116.0f, 445.0f, 184.0f, 44.0f };
-const juce::Rectangle<int> knobReadout { 310, 166, 64, 23 };
+const juce::Rectangle<int> knobBounds { 100, 230, 216, 198 };
+const juce::Rectangle<int> knobReadout { 327, 317, 64, 23 };
+const juce::Rectangle<float> logoBounds { 140.0f, 38.0f, 136.0f, 170.0f };
 
-juce::Point<float> pointOnDial(juce::Point<float> centre, float radius, float angle)
+// Reference center and radius of the knob removed from the source sunburst.
+const juce::Point<float> sunburstPivot { 616.0f, 625.5f };
+constexpr float sunburstRadius = 439.0f;
+
+float knobRadius(juce::Rectangle<float> bounds)
 {
-    return centre + juce::Point<float>(radius * std::sin(angle), -radius * std::cos(angle));
-}
-
-void drawSmdLed(juce::Graphics& g, juce::Point<float> centre, float level)
-{
-    const juce::Colour amber(0xffffa62b);
-    const auto package = juce::Rectangle<float>(18.0f, 11.0f).withCentre(centre);
-    g.setColour(juce::Colour(0xff858176));
-    g.fillRoundedRectangle(package, 1.5f);
-    g.setColour(juce::Colour(0xffb8a982));
-    g.fillRect(package.withWidth(3.0f).reduced(0.0f, 2.0f));
-    g.fillRect(package.withLeft(package.getRight() - 3.0f).reduced(0.0f, 2.0f));
-
-    const auto lens = package.reduced(3.5f, 1.1f);
-    g.setColour(juce::Colour(0xff69543c).interpolatedWith(amber, level));
-    g.fillRoundedRectangle(lens, 1.2f);
-    g.setColour(juce::Colour(0xff33251b).interpolatedWith(juce::Colour(0xffffd788), level));
-    g.fillRoundedRectangle(lens.reduced(3.5f, 2.3f), 1.0f);
-
-    if (level > 0.0f)
-    {
-        g.setGradientFill(juce::ColourGradient(amber.withAlpha(level * 0.64f), centre,
-                            amber.withAlpha(0.0f), centre.translated(16.0f, 0.0f), true));
-        g.fillEllipse(juce::Rectangle<float>(32.0f, 32.0f).withCentre(centre));
-    }
-}
-
-void drawLedWindow(juce::Graphics& g, float amount)
-{
-    g.setColour(juce::Colours::black.withAlpha(0.6f));
-    g.fillRoundedRectangle(ledHousing.expanded(2.0f).translated(0.0f, 3.0f), 12.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff81817a), ledHousing.getTopLeft(),
-                                          juce::Colour(0xff262226), ledHousing.getBottomLeft(), false));
-    g.fillRoundedRectangle(ledHousing, 11.0f);
-
-    const auto cavity = ledHousing.reduced(3.0f);
-    g.setColour(juce::Colour(0xff130f15));
-    g.fillRoundedRectangle(cavity, 9.0f);
-    const auto centre = cavity.getCentre();
-    constexpr int ledCount = 5;
-    for (int i = 0; i < ledCount; ++i)
-    {
-        const auto offset = static_cast<float>(i - ledCount / 2) * 31.0f;
-        const auto level = std::clamp(amount * ledCount - static_cast<float>(i), 0.0f, 1.0f);
-        drawSmdLed(g, centre.translated(offset, 0.0f), level);
-    }
-
-    // Tinted acrylic with a reflected light strip over the LED packages.
-    juce::ColourGradient acrylic(juce::Colour(0x65544c3e), cavity.getTopLeft(),
-                                 juce::Colour(0x5c17120d), cavity.getBottomLeft(), false);
-    acrylic.addColour(0.42, juce::Colour(0x1f4b3d33));
-    g.setGradientFill(acrylic);
-    g.fillRoundedRectangle(cavity, 9.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.22f));
-    g.drawRoundedRectangle(cavity.reduced(2.0f), 7.0f, 0.8f);
-    g.setColour(juce::Colours::white.withAlpha(0.14f));
-    g.fillRoundedRectangle(cavity.reduced(12.0f, 6.0f).withHeight(3.0f), 1.5f);
+    return 0.38f * std::min(bounds.getWidth(), bounds.getHeight());
 }
 }
 
@@ -253,21 +202,9 @@ void FilthLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wid
 {
     const auto bounds = juce::Rectangle<int>(x, y, width, height).toFloat();
     const auto centre = bounds.getCentre();
-    const float radius = 0.38f * std::min(bounds.getWidth(), bounds.getHeight());
+    const float radius = knobRadius(bounds);
     const auto body = juce::Rectangle<float>(2.0f * radius, 2.0f * radius).withCentre(centre);
     const float indicatorAngle = std::lerp(rotaryStartAngle, rotaryEndAngle, sliderPos);
-
-    for (int tick = 0; tick <= 20; ++tick)
-    {
-        const auto angle = std::lerp(rotaryStartAngle, rotaryEndAngle, static_cast<float>(tick) * 0.05f);
-        const bool major = tick % 5 == 0;
-        const auto inner = pointOnDial(centre, radius + 6.0f, angle);
-        const auto outer = pointOnDial(centre, radius + (major ? 12.0f : 10.0f), angle);
-        g.setColour(juce::Colour(0xff211d20));
-        g.drawLine({ inner, outer }, major ? 3.6f : 1.8f);
-        g.setColour(juce::Colour(0xffc7c0ab).withAlpha(0.68f));
-        g.drawLine({ inner.translated(0.0f, -0.7f), outer.translated(0.0f, -0.7f) }, major ? 1.6f : 0.7f);
-    }
 
     const auto shadowCentre = centre.translated(3.0f, 7.0f);
     g.setGradientFill(juce::ColourGradient(juce::Colours::black, shadowCentre,
@@ -296,7 +233,9 @@ void FilthAudioProcessorEditor::DebugButton::paintButton(juce::Graphics& g, bool
 
 FilthAudioProcessorEditor::FilthAudioProcessorEditor(FilthAudioProcessor& p)
     : AudioProcessorEditor(&p),
-      faceplate(juce::ImageCache::getFromMemory(BinaryData::FilthPedal_jpg, BinaryData::FilthPedal_jpgSize))
+      faceplate(juce::ImageCache::getFromMemory(BinaryData::FilthPedal_jpg, BinaryData::FilthPedal_jpgSize)),
+      scribble(juce::ImageCache::getFromMemory(BinaryData::FilthScribble_png, BinaryData::FilthScribble_pngSize)),
+      sunburst(juce::ImageCache::getFromMemory(BinaryData::FilthSunburst_png, BinaryData::FilthSunburst_pngSize))
 {
     debugPanel = std::make_unique<FilthDebugPanel>(p);
     addChildComponent(*debugPanel);
@@ -321,7 +260,6 @@ FilthAudioProcessorEditor::FilthAudioProcessorEditor(FilthAudioProcessor& p)
     };
     filthKnob.onValueChange = [this]
     {
-        repaint(ledHousing.getSmallestIntegerContainer().expanded(8));
         if (adjustingKnob)
             repaint(knobReadout);
     };
@@ -356,7 +294,12 @@ void FilthAudioProcessorEditor::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff1b1913));
     g.drawImage(faceplate, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
-    drawLedWindow(g, static_cast<float>(filthKnob.getValue()));
+    g.drawImage(scribble, logoBounds, juce::RectanglePlacement::centred);
+
+    const auto centre = knobBounds.getCentre().toFloat();
+    const float scale = knobRadius(knobBounds.toFloat()) / sunburstRadius;
+    g.drawImageTransformed(sunburst, juce::AffineTransform::scale(scale)
+        .translated(centre.x - sunburstPivot.x * scale, centre.y - sunburstPivot.y * scale));
 
     if (adjustingKnob)
     {
@@ -375,5 +318,5 @@ void FilthAudioProcessorEditor::resized()
     if (debugButton.getToggleState())
         filthKnob.setBounds(12, 37, getWidth() - 24, 27);
     else
-        filthKnob.setBounds(100, 85, 216, 198);
+        filthKnob.setBounds(knobBounds);
 }
